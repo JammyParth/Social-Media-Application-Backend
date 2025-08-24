@@ -1,110 +1,73 @@
-const { query } = require("../utils/database");
+const supabase = require("../utils/supabaseClient");
 
-/**
- * Follow model for managing user relationships
- */
-
-/**
- * Follow a user
- * @param {number} followerId - ID of the user who wants to follow
- * @param {number} followingId - ID of the user to be followed
- * @returns {Promise<Object>} Follow relationship object
- */
 const followUser = async (followerId, followingId) => {
-    const result = await query(
-        `INSERT INTO follows (follower_id, following_id)
-         VALUES ($1, $2)
-         RETURNING id, follower_id, following_id, created_at`,
-        [followerId, followingId]
-    );
-    return result.rows[0];
+    const { data, error } = await supabase
+        .from("follows")
+        .insert([{ follower_id: followerId, following_id: followingId }])
+        .select("id, follower_id, following_id, created_at")
+        .single();
+    if (error) throw error;
+    return data;
 };
 
-/**
- * Unfollow a user
- * @param {number} followerId - ID of the user who wants to unfollow
- * @param {number} followingId - ID of the user to be unfollowed
- * @returns {Promise<boolean>} Success status
- */
 const unfollowUser = async (followerId, followingId) => {
-    const result = await query(
-        `DELETE FROM follows
-         WHERE follower_id = $1 AND following_id = $2`,
-        [followerId, followingId]
-    );
-    return result.rowCount > 0;
+    const { error } = await supabase
+        .from("follows")
+        .delete()
+        .eq("follower_id", followerId)
+        .eq("following_id", followingId);
+    if (error) throw error;
+    return true;
 };
 
-/**
- * Get list of users that a user follows
- * @param {number} userId - User ID
- * @param {number} limit - Number of records to return
- * @param {number} offset - Number of records to skip
- * @returns {Promise<Array>} List of followed users
- */
 const getFollowing = async (userId, limit = 20, offset = 0) => {
-    const result = await query(
-        `SELECT u.id, u.username, u.full_name, f.created_at as followed_at
-         FROM follows f
-         JOIN users u ON f.following_id = u.id
-         WHERE f.follower_id = $1 AND u.is_deleted = false
-         ORDER BY f.created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
-    );
-    return result.rows;
+    const { data, error } = await supabase
+        .from("follows")
+        .select("users(id, username, full_name), created_at")
+        .eq("follower_id", userId)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) throw error;
+    return data;
 };
 
-/**
- * Get list of users who follow a user
- * @param {number} userId - User ID
- * @param {number} limit - Number of records to return
- * @param {number} offset - Number of records to skip
- * @returns {Promise<Array>} List of followers
- */
 const getFollowers = async (userId, limit = 20, offset = 0) => {
-    const result = await query(
-        `SELECT u.id, u.username, u.full_name, f.created_at as followed_at
-         FROM follows f
-         JOIN users u ON f.follower_id = u.id
-         WHERE f.following_id = $1 AND u.is_deleted = false
-         ORDER BY f.created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
-    );
-    return result.rows;
+    const { data, error } = await supabase
+        .from("follows")
+        .select("users(id, username, full_name), created_at")
+        .eq("following_id", userId)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) throw error;
+    return data;
 };
 
-/**
- * Get follow counts for a user
- * @param {number} userId - User ID
- * @returns {Promise<Object>} Object containing followers and following counts
- */
 const getFollowCounts = async (userId) => {
-    const result = await query(
-        `SELECT
-            (SELECT COUNT(*) FROM follows WHERE following_id = $1) as followers_count,
-            (SELECT COUNT(*) FROM follows WHERE follower_id = $1) as following_count`,
-        [userId]
-    );
-    return result.rows[0];
+    const { data: followers, error: followersError } = await supabase
+        .from("follows")
+        .select("id")
+        .eq("following_id", userId);
+    if (followersError) throw followersError;
+    const { data: following, error: followingError } = await supabase
+        .from("follows")
+        .select("id")
+        .eq("follower_id", userId);
+    if (followingError) throw followingError;
+    return {
+        followers_count: followers.length,
+        following_count: following.length
+    };
 };
 
-/**
- * Check if one user follows another
- * @param {number} followerId - ID of the potential follower
- * @param {number} followingId - ID of the potentially followed user
- * @returns {Promise<boolean>} Whether the follow relationship exists
- */
 const isFollowing = async (followerId, followingId) => {
-    const result = await query(
-        `SELECT EXISTS(
-            SELECT 1 FROM follows
-            WHERE follower_id = $1 AND following_id = $2
-        ) as is_following`,
-        [followerId, followingId]
-    );
-    return result.rows[0].is_following;
+    const { data, error } = await supabase
+        .from("follows")
+        .select("id")
+        .eq("follower_id", followerId)
+        .eq("following_id", followingId)
+        .single();
+    if (error && error.code !== "PGRST116") throw error;
+    return !!data;
 };
 
 module.exports = {

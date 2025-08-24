@@ -1,111 +1,72 @@
-const { query } = require("../utils/database");
+const supabase = require("../utils/supabaseClient");
 
-/**
- * Comment model for managing post comments
- */
-
-/**
- * Create a new comment
- * @param {Object} commentData - Comment data
- * @returns {Promise<Object>} Created comment
- */
 const createComment = async ({ user_id, post_id, content }) => {
-    const result = await query(
-        `INSERT INTO comments (user_id, post_id, content)
-         VALUES ($1, $2, $3)
-         RETURNING id, user_id, post_id, content, created_at`,
-        [user_id, post_id, content]
-    );
-    return result.rows[0];
+    const { data, error } = await supabase
+        .from("comments")
+        .insert([
+            { user_id, post_id, content, is_deleted: false }
+        ])
+        .select("id, user_id, post_id, content, created_at")
+        .single();
+    if (error) throw error;
+    return data;
 };
 
-/**
- * Update an existing comment
- * @param {number} commentId - Comment ID
- * @param {number} userId - User ID (for verification)
- * @param {string} content - New comment content
- * @returns {Promise<Object|null>} Updated comment or null
- */
 const updateComment = async (commentId, userId, content) => {
-    const result = await query(
-        `UPDATE comments
-         SET content = $1, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $2 AND user_id = $3 AND is_deleted = false
-         RETURNING id, user_id, post_id, content, created_at, updated_at`,
-        [content, commentId, userId]
-    );
-    return result.rows[0] || null;
+    const { data, error } = await supabase
+        .from("comments")
+        .update({ content })
+        .eq("id", commentId)
+        .eq("user_id", userId)
+        .eq("is_deleted", false)
+        .select("id, user_id, post_id, content, created_at, updated_at")
+        .single();
+    if (error) throw error;
+    return data || null;
 };
 
-/**
- * Soft delete a comment
- * @param {number} commentId - Comment ID
- * @param {number} userId - User ID (for verification)
- * @returns {Promise<boolean>} Success status
- */
 const deleteComment = async (commentId, userId) => {
-    const result = await query(
-        `UPDATE comments
-         SET is_deleted = true, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1 AND user_id = $2 AND is_deleted = false`,
-        [commentId, userId]
-    );
-    return result.rowCount > 0;
+    const { data, error } = await supabase
+        .from("comments")
+        .update({ is_deleted: true })
+        .eq("id", commentId)
+        .eq("user_id", userId)
+        .eq("is_deleted", false);
+    if (error) throw error;
+    return data && data.length > 0;
 };
 
-/**
- * Get all comments for a post with user details
- * @param {number} postId - Post ID
- * @param {number} limit - Number of records to return
- * @param {number} offset - Number of records to skip
- * @returns {Promise<Array>} Array of comments with user details
- */
 const getPostComments = async (postId, limit = 20, offset = 0) => {
-    const result = await query(
-        `SELECT c.id, c.content, c.created_at, c.updated_at,
-                u.id as user_id, u.username, u.full_name
-         FROM comments c
-         JOIN users u ON c.user_id = u.id
-         WHERE c.post_id = $1 AND c.is_deleted = false
-         ORDER BY c.created_at DESC
-         LIMIT $2 OFFSET $3`,
-        [postId, limit, offset]
-    );
-    return result.rows;
+    const { data, error } = await supabase
+        .from("comments")
+        .select("*, users(id, username, full_name)")
+        .eq("post_id", postId)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) throw error;
+    return data;
 };
 
-/**
- * Get a single comment by ID with user details
- * @param {number} commentId - Comment ID
- * @returns {Promise<Object|null>} Comment object or null
- */
 const getCommentById = async (commentId) => {
-    const result = await query(
-        `SELECT c.id, c.content, c.created_at, c.updated_at,
-                u.id as user_id, u.username, u.full_name,
-                p.id as post_id, p.comments_enabled
-         FROM comments c
-         JOIN users u ON c.user_id = u.id
-         JOIN posts p ON c.post_id = p.id
-         WHERE c.id = $1 AND c.is_deleted = false`,
-        [commentId]
-    );
-    return result.rows[0] || null;
+    const { data, error } = await supabase
+        .from("comments")
+        .select("*, users(id, username, full_name), posts(id, comments_enabled)")
+        .eq("id", commentId)
+        .eq("is_deleted", false)
+        .single();
+    if (error && error.code !== "PGRST116") throw error;
+    return data || null;
 };
 
-/**
- * Get comment count for a post
- * @param {number} postId - Post ID
- * @returns {Promise<number>} Number of comments
- */
 const getCommentCount = async (postId) => {
-    const result = await query(
-        `SELECT COUNT(*) as count 
-         FROM comments 
-         WHERE post_id = $1 AND is_deleted = false`,
-        [postId]
-    );
-    return parseInt(result.rows[0].count);
+    const { data, error } = await supabase
+        .from("comments")
+        .select("id")
+        .eq("post_id", postId)
+        .eq("is_deleted", false);
+    if (error) throw error;
+    return data ? data.length : 0;
 };
 
 module.exports = {

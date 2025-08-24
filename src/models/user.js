@@ -1,8 +1,8 @@
-const { query } = require("../utils/database");
+const supabase = require("../utils/supabaseClient");
 const bcrypt = require("bcryptjs");
 
 /**
- * User model for database operations
+ * User model for Supabase operations
  */
 
 /**
@@ -12,15 +12,20 @@ const bcrypt = require("bcryptjs");
  */
 const createUser = async ({ username, email, password, full_name }) => {
   const hashedPassword = await bcrypt.hash(password, 10);
-
-  const result = await query(
-    `INSERT INTO users (username, email, password_hash, full_name, created_at)
-     VALUES ($1, $2, $3, $4, NOW())
-     RETURNING id, username, email, full_name, created_at`,
-    [username, email, hashedPassword, full_name],
-  );
-
-  return result.rows[0];
+  const { data, error } = await supabase
+    .from("users")
+    .insert([
+      {
+        username,
+        email,
+        password_hash: hashedPassword,
+        full_name,
+      },
+    ])
+    .select("id, username, email, full_name, created_at")
+    .single();
+  if (error) throw error;
+  return data;
 };
 
 /**
@@ -29,11 +34,13 @@ const createUser = async ({ username, email, password, full_name }) => {
  * @returns {Promise<Object|null>} User object or null
  */
 const getUserByUsername = async (username) => {
-  const result = await query("SELECT * FROM users WHERE username = $1", [
-    username,
-  ]);
-
-  return result.rows[0] || null;
+  const { data, error } = await supabase
+    .from("users")
+    .select("*")
+    .eq("username", username)
+    .single();
+  if (error && error.code !== "PGRST116") throw error;
+  return data || null;
 };
 
 /**
@@ -42,12 +49,13 @@ const getUserByUsername = async (username) => {
  * @returns {Promise<Object|null>} User object or null
  */
 const getUserById = async (id) => {
-  const result = await query(
-    "SELECT id, username, email, full_name, created_at FROM users WHERE id = $1",
-    [id],
-  );
-
-  return result.rows[0] || null;
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, username, email, full_name, created_at")
+    .eq("id", id)
+    .single();
+  if (error && error.code !== "PGRST116") throw error;
+  return data || null;
 };
 
 /**

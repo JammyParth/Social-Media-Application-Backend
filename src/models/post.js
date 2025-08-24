@@ -1,177 +1,120 @@
-const { query } = require("../utils/database");
+const supabase = require("../utils/supabaseClient");
 
 /**
- * Post model for database operations
+ * Post model for Supabase operations
  */
 
-/**
- * Create a new post
- * @param {Object} postData - Post data
- * @returns {Promise<Object>} Created post
- */
-const createPost = async ({
-  user_id,
-  content,
-  media_url,
-  comments_enabled = true,
-}) => {
-  const result = await query(
-    `INSERT INTO posts (user_id, content, media_url, comments_enabled, created_at, is_deleted)
-     VALUES ($1, $2, $3, $4, NOW(), false)
-     RETURNING id, user_id, content, media_url, comments_enabled, created_at`,
-    [user_id, content, media_url, comments_enabled],
-  );
-
-  return result.rows[0];
+const createPost = async ({ user_id, content, media_url, comments_enabled = true }) => {
+  const { data, error } = await supabase
+    .from("posts")
+    .insert([
+      { user_id, content, media_url, comments_enabled, is_deleted: false }
+    ])
+    .select("id, user_id, content, media_url, comments_enabled, created_at")
+    .single();
+  if (error) throw error;
+  return data;
 };
 
-/**
- * Get post by ID
- * @param {number} postId - Post ID
- * @returns {Promise<Object|null>} Post object or null
- */
 const getPostById = async (postId) => {
-  const result = await query(
-    `SELECT p.*, u.username, u.full_name
-     FROM posts p
-     JOIN users u ON p.user_id = u.id
-     WHERE p.id = $1`,
-    [postId],
-  );
-
-  return result.rows[0] || null;
+  const { data, error } = await supabase
+    .from("posts")
+    .select("*, users(username, full_name)")
+    .eq("id", postId)
+    .single();
+  if (error && error.code !== "PGRST116") throw error;
+  return data || null;
 };
 
-/**
- * Get posts by user ID
- * @param {number} userId - User ID
- * @param {number} limit - Number of posts to fetch
- * @param {number} offset - Offset for pagination
- * @returns {Promise<Array>} Array of posts
- */
 const getPostsByUserId = async (userId, limit = 20, offset = 0) => {
-  const result = await query(
-    `SELECT p.*, u.username, u.full_name
-     FROM posts p
-     JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = $1
-     ORDER BY p.created_at DESC
-     LIMIT $2 OFFSET $3`,
-    [userId, limit, offset],
-  );
-
-  return result.rows;
+  const { data, error } = await supabase
+    .from("posts")
+    .select("*, users(username, full_name)")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) throw error;
+  return data;
 };
 
-/**
- * Delete a post
- * @param {number} postId - Post ID
- * @param {number} userId - User ID (for ownership verification)
- * @returns {Promise<boolean>} Success status
- */
 const deletePost = async (postId, userId) => {
-  const result = await query(
-    "UPDATE posts SET is_deleted = true WHERE id = $1 AND user_id = $2",
-    [postId, userId],
-  );
-
-  return result.rowCount > 0;
+  const { data, error } = await supabase
+    .from("posts")
+    .update({ is_deleted: true })
+    .eq("id", postId)
+    .eq("user_id", userId);
+  if (error) throw error;
+  return data && data.length > 0;
 };
 
-/**
- * Get posts for user's feed (followed users + own posts)
- * @param {number} userId - User ID
- * @param {number} limit - Number of posts to fetch
- * @param {number} offset - Offset for pagination
- * @returns {Promise<Array>} Array of posts with user and interaction details
- */
 const getFeedPosts = async (userId, limit = 20, offset = 0) => {
-  const result = await query(
-    `SELECT 
-        p.*,
-        u.username,
-        u.full_name,
-        COALESCE(l.like_count, 0) as like_count,
-        COALESCE(c.comment_count, 0) as comment_count,
-        EXISTS(
-            SELECT 1 FROM likes 
-            WHERE post_id = p.id AND user_id = $1
-        ) as user_has_liked
-    FROM posts p
-    JOIN users u ON p.user_id = u.id
-    LEFT JOIN (
-        SELECT post_id, COUNT(*) as like_count
-        FROM likes
-        GROUP BY post_id
-    ) l ON p.id = l.post_id
-    LEFT JOIN (
-        SELECT post_id, COUNT(*) as comment_count
-        FROM comments
-        WHERE is_deleted = false
-        GROUP BY post_id
-    ) c ON p.id = c.post_id
-    WHERE p.is_deleted = false
-    AND (
-        p.user_id = $1
-        OR p.user_id IN (
-            SELECT following_id 
-            FROM follows 
-            WHERE follower_id = $1
-        )
-    )
-    ORDER BY p.created_at DESC
-    LIMIT $2 OFFSET $3`,
-    [userId, limit, offset]
-  );
+  // Get followed users
+  const { data: follows, error: followsError } = await supabase
+    .from("follows")
+    .select("following_id")
+    .eq("follower_id", userId);
+  if (followsError) throw followsError;
+  const followingIds = follows.map(f => f.following_id);
+  const ids = [userId, ...followingIds];
 
-  return result.rows;
+  // Get posts for feed
+  const { data: posts, error: postsError } = await supabase
+    .from("posts")
+    .select("*, users(username, full_name)")
+    .in("user_id", ids)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (postsError) throw postsError;
+
+  // For each post, fetch like and comment counts
+  const postsWithCounts = await Promise.all(
+    posts.map(async post => {
+      // Like count
+      const { data: likes, error: likesError } = await supabase
+        .from("likes")
+        .select("id")
+        .eq("post_id", post.id);
+      if (likesError) throw likesError;
+      // Comments array
+      const { data: comments, error: commentsError } = await supabase
+        .from("comments")
+        .select("id, content, user_id, created_at")
+        .eq("post_id", post.id)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: false });
+      if (commentsError) throw commentsError;
+      // User has liked
+      const { data: userLike, error: userLikeError } = await supabase
+        .from("likes")
+        .select("id")
+        .eq("post_id", post.id)
+        .eq("user_id", userId)
+        .single();
+      if (userLikeError && userLikeError.code !== "PGRST116") throw userLikeError;
+      return {
+        ...post,
+        like_count: likes.length,
+        comment_count: comments.length,
+        comments,
+        user_has_liked: !!userLike
+      };
+    })
+  );
+  return postsWithCounts;
 };
 
-/**
- * Search posts by content
- * @param {string} searchQuery - Search query string
- * @param {number} userId - User ID for like status
- * @param {number} limit - Number of posts to fetch
- * @param {number} offset - Offset for pagination
- * @returns {Promise<Array>} Array of matching posts
- */
 const searchPosts = async (searchQuery, userId, limit = 20, offset = 0) => {
-  const result = await query(
-    `SELECT 
-        p.*,
-        u.username,
-        u.full_name,
-        COALESCE(l.like_count, 0) as like_count,
-        COALESCE(c.comment_count, 0) as comment_count,
-        EXISTS(
-            SELECT 1 FROM likes 
-            WHERE post_id = p.id AND user_id = $1
-        ) as user_has_liked
-    FROM posts p
-    JOIN users u ON p.user_id = u.id
-    LEFT JOIN (
-        SELECT post_id, COUNT(*) as like_count
-        FROM likes
-        GROUP BY post_id
-    ) l ON p.id = l.post_id
-    LEFT JOIN (
-        SELECT post_id, COUNT(*) as comment_count
-        FROM comments
-        WHERE is_deleted = false
-        GROUP BY post_id
-    ) c ON p.id = c.post_id
-    WHERE p.is_deleted = false
-    AND (
-        p.content ILIKE $2
-        OR u.username ILIKE $2
-        OR u.full_name ILIKE $2
-    )
-    ORDER BY p.created_at DESC
-    LIMIT $3 OFFSET $4`,
-    [userId, `%${searchQuery}%`, limit, offset]
-  );
-
-  return result.rows;
+  // Supabase does not support ILIKE, so use LIKE for case-insensitive search
+  const { data, error } = await supabase
+    .from("posts")
+    .select("*, users(username, full_name)")
+    .ilike("content", `%${searchQuery}%`)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+  if (error) throw error;
+  return data;
 };
 
 module.exports = {

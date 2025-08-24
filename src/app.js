@@ -4,7 +4,6 @@ const helmet = require("helmet");
 require("dotenv").config();
 
 const logger = require("./utils/logger");
-const { connectDB } = require("./utils/database");
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/users");
 const postRoutes = require("./routes/posts");
@@ -54,21 +53,9 @@ app.use("*", (req, res) => {
 /**
  * Start the server
  */
-const startServer = async () => {
-	try {
-		await connectDB();
-		app.listen(PORT, () => {
-			logger.verbose(`Server is running on port ${PORT}`);
-			logger.verbose(
-				`Environment: ${process.env.NODE_ENV || "development"}`
-			);
-		});
-	} catch (error) {
-		logger.critical("Failed to start server:", error);
-		process.exit(1);
-	}
-};
-
-startServer();
+app.listen(PORT, () => {
+	logger.verbose(`Server is running on port ${PORT}`);
+	logger.verbose(`Environment: ${process.env.NODE_ENV || "development"}`);
+});
 
 module.exports = app;
